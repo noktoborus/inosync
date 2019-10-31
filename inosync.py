@@ -3,9 +3,10 @@
 
 import os,sys
 from optparse import OptionParser,make_option
-from time import sleep
 from syslog import *
 from pyinotify import *
+
+# TODO: per-thread directory subscribe
 
 __author__ = "Benedikt Böhm"
 __copyright__ = "Copyright (c) 2007-2008 Benedikt Böhm <bb@xnull.de>"
@@ -28,6 +29,11 @@ OPTION_LIST = [
       default = False,
       help = "do not actually call rsync"),
   make_option(
+      "-s", dest = "sched",
+      action = "store_true",
+      default = False,
+      help = "schedule rsync calls"),
+  make_option(
       "-v", dest = "verbose",
       action = "store_true",
       default = False,
@@ -42,11 +48,30 @@ DEFAULT_EVENTS = [
     "IN_MOVED_TO"
 ]
 
+# url-to-time list
+LAST_EVENT = {
+    }
+
+def call(cmd):
+  syslog(LOG_DEBUG, "executing %s" % cmd)
+  proc = os.popen(cmd)
+  for line in proc:
+    syslog(LOG_DEBUG, "[rsync] %s" % line.strip())
+
+def sched():
+  ctime = time.time()
+  for ev_cmd, ev_time in LAST_EVENT.items():
+    if ctime + 0.100 > ev_time:
+      call(ev_cmd)
+      LAST_EVENT.pop(ev_cmd)
+
 class RsyncEvent(ProcessEvent):
   pretend = None
+  sched = None
 
-  def __init__(self, pretend=False):
+  def __init__(self, pretend=False, sched=False):
     self.pretend = pretend
+    self.sched = sched
 
   def sync(self, wpath):
     args = [config.rsync, "-ltrp", "--delete"]
@@ -56,28 +81,34 @@ class RsyncEvent(ProcessEvent):
     if config.logfile:
       args.append("--log-file=%s" % config.logfile)
     if "rexcludes" in dir(config):
-      for rexclude in config.rexcludes:
+      for rexclude in config.rexcludes[config.wpaths.index(wpath)]:
         args.append("--exclude=%s" % rexclude)
     args.append(wpath)
     rpath = config.rpaths[config.wpaths.index(wpath)]
     args.append("%s")
-    cmd = " ".join(args)
+    _cmd = " ".join(args)
     for node in config.rnodes:
+      cmd = (_cmd % (node + rpath))
       if self.pretend:
-        syslog("would execute `%s'" % (cmd % (node + rpath)))
+        syslog("would execute `%s'" % cmd)
+      if self.sched:
+        syslog("sched execute `%s'" % cmd)
+        LAST_EVENT[cmd] = time.time()
       else:
-        syslog(LOG_DEBUG, "executing %s" % (cmd % (node + rpath)))
-        proc = os.popen(cmd % (node + rpath))
-        for line in proc:
-          syslog(LOG_DEBUG, "[rsync] %s" % line.strip())
+        call(cmd)
 
   def process_default(self, event):
     syslog(LOG_DEBUG, "caught %s on %s" % \
         (event.maskname, os.path.join(event.path, event.name)))
     for wpath in config.wpaths:
       if os.path.realpath(wpath) in os.path.realpath(event.path):
+        for rexclude in config.rexcludes[config.wpaths.index(wpath)]:
+          if os.path.realpath(os.path.join(wpath, rexclude)) in os.path.realpath(os.path.join(event.path, event.name)):
+            syslog(LOG_DEBUG, "ignore event because '%s' in rexcludes " % \
+                   (rexclude))
+            return
         self.sync(wpath)
-        break
+        return
 
 def daemonize():
   try:
@@ -197,7 +228,7 @@ def main():
     daemonize()
 
   wm = WatchManager()
-  ev = RsyncEvent(options.pretend)
+  ev = RsyncEvent(options.pretend, options.sched)
   notifier = AsyncNotifier(wm, ev, read_freq=config.edelay)
   mask = reduce(lambda x,y: x|y, [EventsCodes.ALL_FLAGS[e] for e in config.emask])
   wds = wm.add_watch(config.wpaths, mask, rec=True, auto_add=True)
@@ -206,7 +237,9 @@ def main():
     ev.sync(wpath)
     syslog(LOG_DEBUG, "initial synchronization on %s done" % wpath)
     syslog("resuming normal operations on %s" % wpath)
-  asyncore.loop()
+  while True:
+    asyncore.loop(1, count=1)
+    sched()
   sys.exit(0)
 
 if __name__ == "__main__":
