@@ -52,7 +52,7 @@ except ``/var/www/localhost`` to 3 remote locations:
 
   # exclude list for rsync
   rexcludes = [
-  	"/localhost",
+  	["/localhost", ],
   ]
 
   # rpaths has one-to-one correspondence with wpaths for syncing multiple directories
