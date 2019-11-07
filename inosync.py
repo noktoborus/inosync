@@ -101,9 +101,9 @@ class RsyncEvent(ProcessEvent):
     syslog(LOG_DEBUG, "caught %s on %s" % \
         (event.maskname, os.path.join(event.path, event.name)))
     for wpath in config.wpaths:
-      if os.path.realpath(wpath) in os.path.realpath(event.path):
+      if os.path.realpath(wpath) + '/' in os.path.realpath(event.path) + '/':
         for rexclude in config.rexcludes[config.wpaths.index(wpath)]:
-          if os.path.realpath(os.path.join(wpath, rexclude)) in os.path.realpath(os.path.join(event.path, event.name)):
+          if os.path.realpath(os.path.join(wpath, rexclude)) + '/' in os.path.realpath(os.path.join(event.path, event.name)) + '/':
             syslog(LOG_DEBUG, "ignore event because '%s' in rexcludes " % \
                    (rexclude))
             return
